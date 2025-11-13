@@ -21,6 +21,7 @@ type SidebarAdmProps = {
   onChange?: Dispatch<SetStateAction<string>>;
 };
 
+// mesma ideia do professor: itens fixos
 const items = [
   { key: "dashboard", label: "Dashboard", icon: BarChart2, href: "/adm/dashboard" },
   { key: "usuarios", label: "Usuários", icon: Users, href: "/adm/usuarios" },
