@@ -83,4 +83,3 @@ export function SidebarAdm({ open, active, onChange }: SidebarAdmProps) {
     </aside>
   );
 }
-
