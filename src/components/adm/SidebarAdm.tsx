@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/router";
+import { usePathname } from "next/navigation";
 import {
   BarChart2,
   BookOpen,
@@ -21,7 +21,6 @@ type SidebarAdmProps = {
   onChange?: Dispatch<SetStateAction<string>>;
 };
 
-// mesma ideia do professor: itens fixos
 const items = [
   { key: "dashboard", label: "Dashboard", icon: BarChart2, href: "/adm/dashboard" },
   { key: "usuarios", label: "Usuários", icon: Users, href: "/adm/usuarios" },
@@ -35,8 +34,8 @@ const items = [
 ] as const;
 
 export function SidebarAdm({ open, active, onChange }: SidebarAdmProps) {
-  const router = useRouter();
-  const currentPath = active ?? router.pathname;
+  const pathname = usePathname();
+  const currentPath = active ?? pathname ?? "";
 
   return (
     <aside
