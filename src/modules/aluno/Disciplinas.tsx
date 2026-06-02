@@ -9,32 +9,40 @@ import {
   ArrowRight,
   ArrowLeft,
   Award,
-  Clock,
   CheckCircle,
   TrendingUp,
+  Calculator,
+  Atom,
+  Palette,
+  Zap,
+  Globe2,
+  Flame,
+  ScrollText,
+  Clock,
 } from "lucide-react";
-import {
-  FaCalculator,
-  FaFlask,
-  FaGlobeAmericas,
-  FaBook,
-  FaAtom,
-  FaPalette,
-} from "react-icons/fa";
+import { supabase } from "@/lib/supabaseClient";
 
 type IconComponent = React.ComponentType<{ className?: string }>;
 
-type Disciplina = {
+type DisciplinaUI = {
   id: number;
+  codigo: string; // mat, hist, bio, qui, etc
   nome: string;
   icon: IconComponent;
   cor: keyof typeof cores;
   progresso: number;
-  moedas: number;
-  totalMoedas: number;
+  moedas_conquistadas: number;
+  moedas_totais_disciplina?: number;
   atividades: { total: number; concluidas: number; pendentes: number };
   resumos: number;
   videoaulas: { total: number; assistidas: number };
+};
+
+type DisciplinaDb = {
+  id_disciplina: number;
+  nome?: string | null;
+  nome_disciplina?: string | null;
+  codigo: string | null;
 };
 
 const cores = {
@@ -86,7 +94,40 @@ const cores = {
     bar: "bg-pink-600",
     iconBg: "bg-pink-100",
   },
+  orange: {
+    grad: "from-orange-500 to-red-500",
+    text: "text-orange-600",
+    bgLight: "bg-orange-50",
+    border: "border-orange-200",
+    bar: "bg-orange-600",
+    iconBg: "bg-orange-100",
+  },
 } as const;
+
+// Só visual (ícone + cor), nada de número mock
+const DISCIPLINA_VISUAL: Record<
+  string,
+  { icon: IconComponent; cor: keyof typeof cores }
+> = {
+  matematica: { icon: Calculator, cor: "blue" },
+  historia: { icon: ScrollText, cor: "amber" },
+  biologia: { icon: Atom, cor: "green" },
+  fisica: { icon: Zap, cor: "purple" },
+  geografia: { icon: Globe2, cor: "teal" },
+  artes: { icon: Palette, cor: "pink" },
+  portugues: { icon: BookOpen, cor: "green" },
+  quimica: { icon: Flame, cor: "orange" },
+};
+
+// Normaliza nome vindo do banco (remove acentos e põe minúsculo)
+// e já trata null/undefined pra não quebrar
+function normalizarNome(nome?: string | null): string {
+  if (!nome) return "";
+  return nome
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
 
 const Disciplinas = () => {
   const router = useRouter();
@@ -97,92 +138,184 @@ const Disciplinas = () => {
     "resumos"
   );
 
-  const disciplinas: Disciplina[] = [
-    {
-      id: 1,
-      nome: "Matemática",
-      icon: FaCalculator,
-      cor: "blue",
-      progresso: 75,
-      moedas: 450,
-      totalMoedas: 600,
-      atividades: { total: 12, concluidas: 9, pendentes: 3 },
-      resumos: 8,
-      videoaulas: { total: 15, assistidas: 12 },
-    },
-    {
-      id: 2,
-      nome: "História",
-      icon: FaBook,
-      cor: "amber",
-      progresso: 60,
-      moedas: 320,
-      totalMoedas: 550,
-      atividades: { total: 10, concluidas: 6, pendentes: 4 },
-      resumos: 12,
-      videoaulas: { total: 18, assistidas: 10 },
-    },
-    {
-      id: 3,
-      nome: "Biologia",
-      icon: FaFlask,
-      cor: "green",
-      progresso: 85,
-      moedas: 520,
-      totalMoedas: 600,
-      atividades: { total: 14, concluidas: 12, pendentes: 2 },
-      resumos: 6,
-      videoaulas: { total: 20, assistidas: 17 },
-    },
-    {
-      id: 4,
-      nome: "Física",
-      icon: FaAtom,
-      cor: "purple",
-      progresso: 45,
-      moedas: 180,
-      totalMoedas: 400,
-      atividades: { total: 8, concluidas: 4, pendentes: 4 },
-      resumos: 5,
-      videoaulas: { total: 12, assistidas: 5 },
-    },
-    {
-      id: 5,
-      nome: "Geografia",
-      icon: FaGlobeAmericas,
-      cor: "teal",
-      progresso: 70,
-      moedas: 350,
-      totalMoedas: 500,
-      atividades: { total: 11, concluidas: 8, pendentes: 3 },
-      resumos: 9,
-      videoaulas: { total: 16, assistidas: 11 },
-    },
-    {
-      id: 6,
-      nome: "Artes",
-      icon: FaPalette,
-      cor: "pink",
-      progresso: 90,
-      moedas: 270,
-      totalMoedas: 300,
-      atividades: { total: 6, concluidas: 6, pendentes: 0 },
-      resumos: 4,
-      videoaulas: { total: 8, assistidas: 8 },
-    },
-  ];
+  const [disciplinas, setDisciplinas] = useState<DisciplinaUI[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [erro, setErro] = useState<string | null>(null);
 
-  const selecionada =
-    disciplinas.find((d) => d.id === disciplinaSelecionada) || null;
+  // Carrega disciplinas + stats reais do aluno logado
+  useEffect(() => {
+    async function carregarDisciplinasAluno() {
+      try {
+        setLoading(true);
+        setErro(null);
+
+        // 1. Usuário autenticado (Supabase Auth)
+        const {
+          data: { user },
+          error: authError,
+        } = await supabase.auth.getUser();
+
+        if (authError) throw authError;
+        if (!user || !user.id) {
+          setErro("Usuário não autenticado.");
+          setLoading(false);
+          return;
+        }
+
+        // 2. Busca o id_usuario na tabela usuarios via auth_user_id
+        const { data: usuario, error: usuarioError } = await supabase
+          .from("usuarios")
+          .select("id_usuario, email")
+          .eq("auth_user_id", user.id)
+          .single();
+
+        if (usuarioError || !usuario) {
+          setErro("Usuário não encontrado na tabela de usuários.");
+          setLoading(false);
+          return;
+        }
+
+        // 3. Busca o aluno vinculado a esse usuário, com turma
+        const { data: aluno, error: alunoError } = await supabase
+          .from("alunos")
+          .select("id_aluno, id_turma")
+          .eq("id_usuario", usuario.id_usuario)
+          .single();
+
+        if (alunoError || !aluno) {
+          setErro("Aluno não encontrado.");
+          setLoading(false);
+          return;
+        }
+
+        if (!aluno.id_turma) {
+          setErro("Aluno não está vinculado a nenhuma turma.");
+          setLoading(false);
+          return;
+        }
+
+        const idAluno = aluno.id_aluno;
+
+        // 4. Buscar diretamente da view agregada vw_disciplinas_moedas_aluno
+        const { data: vwRows, error: vwError } = await supabase
+          .from("vw_disciplinas_moedas_aluno")
+          .select("*")
+          .eq("id_aluno", idAluno);
+
+        if (vwError) throw vwError;
+
+        if (!vwRows || vwRows.length === 0) {
+          setDisciplinas([]);
+          setLoading(false);
+          return;
+        }
+
+        // Monta UI com base na view, usando colunas já agregadas por aluno
+        const disciplinasUI: DisciplinaUI[] = vwRows.map((row: any) => {
+          const nomeDisciplina: string =
+            row.nome_disciplina || row.nome || "Disciplina";
+          const codigoDisciplina: string = row.codigo || "";
+
+          const key = normalizarNome(nomeDisciplina);
+          const visual =
+            DISCIPLINA_VISUAL[key] || DISCIPLINA_VISUAL["matematica"];
+
+          return {
+            id: row.id_disciplina,
+            codigo: codigoDisciplina,
+            nome: nomeDisciplina,
+            icon: visual.icon,
+            cor: visual.cor,
+
+            // agora vem direto da view, já calculado por aluno
+            progresso: row.progresso_percent ?? 0,
+            moedas_conquistadas: row.moedas_conquistadas ?? 0,
+            moedas_totais_disciplina: row.moedas_totais_disciplina ?? 0,
+
+            atividades: {
+              total: row.total_atividades ?? 0,
+              concluidas: row.atividades_concluidas ?? 0,
+              pendentes: row.atividades_pendentes ?? 0,
+            },
+            resumos: row.total_resumos ?? 0,
+            videoaulas: {
+              total: row.total_videoaulas ?? 0,
+              assistidas: row.videoaulas_assistidas ?? 0,
+            },
+          };
+        });
+
+        setDisciplinas(disciplinasUI);
+        setLoading(false);
+      } catch (e: any) {
+        console.error(e);
+        setErro("Erro ao carregar disciplinas.");
+        setLoading(false);
+      }
+    }
+
+    carregarDisciplinasAluno();
+  }, []);
 
   // Sempre que mudar de disciplina, voltar a aba padrão
   useEffect(() => {
     setAba("resumos");
   }, [disciplinaSelecionada]);
 
-  if (disciplinaSelecionada && selecionada) {
+  const selecionada =
+    disciplinas.find((d) => d.id === disciplinaSelecionada) || null;
+
+  // Estado de carregamento / erro
+  if (loading) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center gap-2">
+          <BookOpen className="h-6 w-6 text-blue-600" />
+          <h1 className="text-2xl font-bold text-gray-900">Disciplinas</h1>
+        </div>
+        <p className="text-gray-600">Carregando suas disciplinas...</p>
+      </div>
+    );
+  }
+
+  if (erro) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center gap-2">
+          <BookOpen className="h-6 w-6 text-blue-600" />
+          <h1 className="text-2xl font-bold text-gray-900">Disciplinas</h1>
+        </div>
+        <p className="text-red-500 text-sm">{erro}</p>
+      </div>
+    );
+  }
+
+  if (!disciplinas.length) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center gap-2">
+          <BookOpen className="h-6 w-6 text-blue-600" />
+          <h1 className="text-2xl font-bold text-gray-900">Disciplinas</h1>
+        </div>
+        <p className="text-gray-600">
+          Nenhuma disciplina encontrada para o seu usuário.
+        </p>
+      </div>
+    );
+  }
+
+  // Tela de detalhes quando uma disciplina está selecionada
+  if (selecionada) {
     const t = cores[selecionada.cor];
     const Icon = selecionada.icon;
+
+    const percVideo =
+      selecionada.videoaulas.total > 0
+        ? Math.round(
+            (selecionada.videoaulas.assistidas / selecionada.videoaulas.total) *
+              100
+          )
+        : 0;
 
     return (
       <div className="space-y-6 transition-all duration-300">
@@ -204,8 +337,10 @@ const Disciplinas = () => {
                 {selecionada.nome}
               </h1>
               <p className="text-sm text-gray-600">
-                {selecionada.moedas} de {selecionada.totalMoedas} moedas
-                conquistadas
+                {selecionada.moedas_conquistadas} moedas conquistadas
+                {typeof selecionada.moedas_totais_disciplina === "number" && (
+                  <> / {selecionada.moedas_totais_disciplina}</>
+                )}
               </p>
             </div>
           </div>
@@ -233,26 +368,6 @@ const Disciplinas = () => {
                     className={`h-full bg-gradient-to-r ${t.grad} transition-all duration-500`}
                     style={{ width: `${selecionada.progresso}%` }}
                   />
-                </div>
-              </div>
-              <div className="grid grid-cols-3 gap-4 mt-6">
-                <div className="text-center">
-                  <div className={`text-2xl font-bold ${t.text}`}>
-                    {selecionada.moedas}
-                  </div>
-                  <div className="text-sm text-gray-600">Moedas</div>
-                </div>
-                <div className="text-center">
-                  <div className={`text-2xl font-bold ${t.text}`}>
-                    {selecionada.atividades.concluidas}
-                  </div>
-                  <div className="text-sm text-gray-600">Concluídas</div>
-                </div>
-                <div className="text-center">
-                  <div className={`text-2xl font-bold ${t.text}`}>
-                    {selecionada.videoaulas.assistidas}
-                  </div>
-                  <div className="text-sm text-gray-600">Videoaulas</div>
                 </div>
               </div>
             </div>
@@ -349,24 +464,13 @@ const Disciplinas = () => {
                 <div className="space-y-2">
                   <div className="flex justify-between text-sm text-gray-600">
                     <span>Progresso</span>
-                    <span>
-                      {Math.round(
-                        (selecionada.videoaulas.assistidas /
-                          selecionada.videoaulas.total) *
-                          100
-                      )}
-                      %
-                    </span>
+                    <span>{percVideo}%</span>
                   </div>
                   <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
                     <div
                       className={`h-full ${t.bar} transition-all duration-300`}
                       style={{
-                        width: `${
-                          (selecionada.videoaulas.assistidas /
-                            selecionada.videoaulas.total) *
-                          100
-                        }%`,
+                        width: `${percVideo}%`,
                       }}
                     />
                   </div>
@@ -378,259 +482,6 @@ const Disciplinas = () => {
               </CardContent>
             </Card>
           )}
-        </div>
-
-        {/* Opções disponíveis */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {/* Resumos */}
-          <Card className="hover:shadow-lg transition-shadow">
-            <CardContent className="p-6">
-              <div
-                className="cursor-pointer"
-                role="button"
-                tabIndex={0}
-                onClick={() => {
-                  if (selecionada) {
-                    const slug =
-                      selecionada.nome.toLowerCase() === "matemática"
-                        ? "mat"
-                        : selecionada.nome.toLowerCase() === "português"
-                        ? "port"
-                        : selecionada.nome.toLowerCase() === "história"
-                        ? "hist"
-                        : selecionada.nome.toLowerCase() === "geografia"
-                        ? "geo"
-                        : selecionada.nome.toLowerCase() === "biologia"
-                        ? "bio"
-                        : selecionada.nome.toLowerCase() === "física"
-                        ? "fis"
-                        : selecionada.nome.toLowerCase() === "artes"
-                        ? "art"
-                        : String(selecionada.id);
-                    router.push(`/aluno/disciplinas/${slug}/resumos`);
-                  }
-                }}
-                onKeyDown={(e: React.KeyboardEvent<HTMLDivElement>) => {
-                  if (e.key === "Enter") {
-                    if (selecionada) {
-                      const slug =
-                        selecionada.nome.toLowerCase() === "matemática"
-                          ? "mat"
-                          : selecionada.nome.toLowerCase() === "português"
-                          ? "port"
-                          : selecionada.nome.toLowerCase() === "história"
-                          ? "hist"
-                          : selecionada.nome.toLowerCase() === "geografia"
-                          ? "geo"
-                          : selecionada.nome.toLowerCase() === "biologia"
-                          ? "bio"
-                          : selecionada.nome.toLowerCase() === "física"
-                          ? "fis"
-                          : selecionada.nome.toLowerCase() === "artes"
-                          ? "art"
-                          : String(selecionada.id);
-                      router.push(`/aluno/disciplinas/${slug}/resumos`);
-                    }
-                  }
-                }}
-              >
-                <div className="flex items-center gap-3 mb-4">
-                  <div className={`p-2 ${t.iconBg} rounded-lg`}>
-                    <FileText className={`h-5 w-5 ${t.text}`} />
-                  </div>
-                  <h3 className="font-semibold text-gray-900">Resumos</h3>
-                </div>
-                <p className="text-sm text-gray-600 mb-4">
-                  Materiais de estudo e resumos postados pelos professores
-                </p>
-                <div className="flex items-center justify-between">
-                  <span className={`text-2xl font-bold ${t.text}`}>
-                    {selecionada.resumos}
-                  </span>
-                  <ArrowRight className="h-5 w-5 text-gray-400" />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Atividades */}
-          <Card className="hover:shadow-lg transition-shadow">
-            <CardContent className="p-6">
-              <div
-                className="cursor-pointer"
-                role="button"
-                tabIndex={0}
-                onClick={() => {
-                  if (selecionada) {
-                    const slug =
-                      selecionada.nome.toLowerCase() === "matemática"
-                        ? "mat"
-                        : selecionada.nome.toLowerCase() === "português"
-                        ? "port"
-                        : selecionada.nome.toLowerCase() === "história"
-                        ? "hist"
-                        : selecionada.nome.toLowerCase() === "geografia"
-                        ? "geo"
-                        : selecionada.nome.toLowerCase() === "biologia"
-                        ? "bio"
-                        : selecionada.nome.toLowerCase() === "física"
-                        ? "fis"
-                        : selecionada.nome.toLowerCase() === "artes"
-                        ? "art"
-                        : String(selecionada.id);
-                    router.push(`/aluno/disciplinas/${slug}/atividades`);
-                  }
-                }}
-                onKeyDown={(e: React.KeyboardEvent<HTMLDivElement>) => {
-                  if (e.key === "Enter") {
-                    if (selecionada) {
-                      const slug =
-                        selecionada.nome.toLowerCase() === "matemática"
-                          ? "mat"
-                          : selecionada.nome.toLowerCase() === "português"
-                          ? "port"
-                          : selecionada.nome.toLowerCase() === "história"
-                          ? "hist"
-                          : selecionada.nome.toLowerCase() === "geografia"
-                          ? "geo"
-                          : selecionada.nome.toLowerCase() === "biologia"
-                          ? "bio"
-                          : selecionada.nome.toLowerCase() === "física"
-                          ? "fis"
-                          : selecionada.nome.toLowerCase() === "artes"
-                          ? "art"
-                          : String(selecionada.id);
-                      router.push(`/aluno/disciplinas/${slug}/atividades`);
-                    }
-                  }
-                }}
-              >
-                <div className="flex items-center gap-3 mb-4">
-                  <div className={`p-2 ${t.iconBg} rounded-lg`}>
-                    <Activity className={`h-5 w-5 ${t.text}`} />
-                  </div>
-                  <h3 className="font-semibold text-gray-900">Atividades</h3>
-                </div>
-                <p className="text-sm text-gray-600 mb-4">
-                  Tarefas, quizzes e exercícios com prazos e status
-                </p>
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="flex items-center gap-1">
-                      <CheckCircle className="h-4 w-4 text-green-500" />
-                      Concluídas
-                    </span>
-                    <span className="font-semibold">
-                      {selecionada.atividades.concluidas}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="flex items-center gap-1">
-                      <Clock className="h-4 w-4 text-orange-500" />
-                      Pendentes
-                    </span>
-                    <span className="font-semibold">
-                      {selecionada.atividades.pendentes}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Videoaulas */}
-          <Card className="hover:shadow-lg transition-shadow">
-            <CardContent className="p-6">
-              <div
-                className="cursor-pointer"
-                role="button"
-                tabIndex={0}
-                onClick={() => {
-                  if (selecionada) {
-                    const slug =
-                      selecionada.nome.toLowerCase() === "matemática"
-                        ? "mat"
-                        : selecionada.nome.toLowerCase() === "português"
-                        ? "port"
-                        : selecionada.nome.toLowerCase() === "história"
-                        ? "hist"
-                        : selecionada.nome.toLowerCase() === "geografia"
-                        ? "geo"
-                        : selecionada.nome.toLowerCase() === "biologia"
-                        ? "bio"
-                        : selecionada.nome.toLowerCase() === "física"
-                        ? "fis"
-                        : selecionada.nome.toLowerCase() === "artes"
-                        ? "art"
-                        : String(selecionada.id);
-                    router.push(`/aluno/disciplinas/${slug}/videoaulas`);
-                  }
-                }}
-                onKeyDown={(e: React.KeyboardEvent<HTMLDivElement>) => {
-                  if (e.key === "Enter") {
-                    if (selecionada) {
-                      const slug =
-                        selecionada.nome.toLowerCase() === "matemática"
-                          ? "mat"
-                          : selecionada.nome.toLowerCase() === "português"
-                          ? "port"
-                          : selecionada.nome.toLowerCase() === "história"
-                          ? "hist"
-                          : selecionada.nome.toLowerCase() === "geografia"
-                          ? "geo"
-                          : selecionada.nome.toLowerCase() === "biologia"
-                          ? "bio"
-                          : selecionada.nome.toLowerCase() === "física"
-                          ? "fis"
-                          : selecionada.nome.toLowerCase() === "artes"
-                          ? "art"
-                          : String(selecionada.id);
-                      router.push(`/aluno/disciplinas/${slug}/videoaulas`);
-                    }
-                  }
-                }}
-              >
-                <div className="flex items-center gap-3 mb-4">
-                  <div className={`p-2 ${t.iconBg} rounded-lg`}>
-                    <Play className={`h-5 w-5 ${t.text}`} />
-                  </div>
-                  <h3 className="font-semibold text-gray-900">Videoaulas</h3>
-                </div>
-                <p className="text-sm text-gray-600 mb-4">
-                  Player integrado com progresso salvo automaticamente
-                </p>
-                <div className="space-y-2">
-                  <div className="flex justify-between text-sm text-gray-600">
-                    <span>Progresso</span>
-                    <span>
-                      {Math.round(
-                        (selecionada.videoaulas.assistidas /
-                          selecionada.videoaulas.total) *
-                          100
-                      )}
-                      %
-                    </span>
-                  </div>
-                  <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
-                    <div
-                      className={`h-full ${t.bar} transition-all duration-300`}
-                      style={{
-                        width: `${
-                          (selecionada.videoaulas.assistidas /
-                            selecionada.videoaulas.total) *
-                          100
-                        }%`,
-                      }}
-                    />
-                  </div>
-                  <div className="text-xs text-gray-500">
-                    {selecionada.videoaulas.assistidas} de{" "}
-                    {selecionada.videoaulas.total} assistidas
-                  </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
         </div>
       </div>
     );
@@ -648,65 +499,12 @@ const Disciplinas = () => {
         exclusivos.
       </p>
 
-      {/* Cards de Estatísticas */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
-        <Card className="border border-gray-200 rounded-xl bg-white shadow-sm hover:shadow-md transition-all">
-          <CardContent className="p-4 flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">
-                Total de Disciplinas
-              </p>
-              <p className="text-2xl font-bold text-violet-700">
-                {disciplinas.length}
-              </p>
-            </div>
-            <div className="p-3 rounded-xl text-white bg-gradient-to-br from-violet-400 to-violet-500">
-              <BookOpen className="h-5 w-5" />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border border-gray-200 rounded-xl bg-white shadow-sm hover:shadow-md transition-all">
-          <CardContent className="p-4 flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">
-                Progresso Médio
-              </p>
-              <p className="text-2xl font-bold text-violet-700">
-                {Math.round(
-                  disciplinas.reduce((acc, d) => acc + d.progresso, 0) /
-                    disciplinas.length
-                )}
-                %
-              </p>
-            </div>
-            <div className="p-3 rounded-xl text-white bg-gradient-to-br from-green-400 to-green-500">
-              <TrendingUp className="h-5 w-5" />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border border-gray-200 rounded-xl bg-white shadow-sm hover:shadow-md transition-all">
-          <CardContent className="p-4 flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">
-                Total de Moedas
-              </p>
-              <p className="text-2xl font-bold text-violet-700">
-                {disciplinas.reduce((acc, d) => acc + d.moedas, 0)}
-              </p>
-            </div>
-            <div className="p-3 rounded-xl text-white bg-gradient-to-br from-yellow-400 to-yellow-500">
-              <Award className="h-5 w-5" />
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
+      {/* Cards das disciplinas */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
         {disciplinas.map((disciplina) => {
           const t = cores[disciplina.cor];
           const Icon = disciplina.icon;
+          const n = disciplina.nome.toLowerCase();
           return (
             <Card
               key={disciplina.id}
@@ -716,39 +514,14 @@ const Disciplinas = () => {
                 <div
                   className="cursor-pointer h-full flex flex-col justify-between"
                   onClick={() => {
-                    const n = disciplina.nome.toLowerCase();
-                    const slug =
-                      n === "matemática"
-                        ? "mat"
-                        : n === "português"
-                        ? "port"
-                        : n === "história" || n === "historia"
-                        ? "hist"
-                        : n === "geografia"
-                        ? "geo"
-                        : n === "biologia"
-                        ? "bio"
-                        : n === "física" || n === "fisica"
-                        ? "fis"
-                        : n === "artes"
-                        ? "art"
-                        : String(disciplina.id);
-                    const tema =
-                      n === "matemática"
-                        ? "matematica"
-                        : n === "português"
-                        ? "portugues"
-                        : n === "história" || n === "historia"
-                        ? "historia"
-                        : n === "geografia"
-                        ? "geografia"
-                        : n === "biologia"
-                        ? "biologia"
-                        : n === "física" || n === "fisica"
-                        ? "fisica"
-                        : n === "artes"
-                        ? "artes"
-                        : "matematica";
+                    // Usa codigo direto da disciplina (mat, hist, bio, qui, etc)
+                    const slug = disciplina.codigo || String(disciplina.id);
+                    // Normaliza nome para tema (remove acentos e deixa minúsculo)
+                    const tema = disciplina.nome
+                      .normalize("NFD")
+                      .replace(/[\u0300-\u036f]/g, "")
+                      .toLowerCase();
+                    setDisciplinaSelecionada(disciplina.id);
                     router.push({
                       pathname: `/aluno/disciplinas/${slug}`,
                       query: { tema },
@@ -766,7 +539,11 @@ const Disciplinas = () => {
                         {disciplina.nome}
                       </h3>
                       <p className="text-xs text-gray-600">
-                        {disciplina.moedas} moedas conquistadas
+                        {disciplina.moedas_conquistadas} moedas conquistadas
+                        {typeof disciplina.moedas_totais_disciplina ===
+                          "number" && (
+                          <> / {disciplina.moedas_totais_disciplina}</>
+                        )}
                       </p>
                     </div>
                   </div>

@@ -1,35 +1,66 @@
-import { Bell, User } from "lucide-react";
+"use client";
+
 import Image from "next/image";
 import Link from "next/link";
-import { Button } from "../ui/Button";
+import { Menu, ChevronLeft } from "lucide-react";
+import { admin } from "@/lib/mock/admin";
+import { Notifications } from "@/components/ui/Notifications";
 
-export function HeaderAdm() {
+type HeaderAdmProps = {
+  onToggleSidebar?: () => void;
+  sidebarOpen?: boolean;
+};
+
+export function HeaderAdm({ onToggleSidebar, sidebarOpen }: HeaderAdmProps) {
   return (
-    <header className="fixed top-0 z-50 w-full border-b bg-white shadow-sm">
-      <div className="flex h-16 items-center px-4 md:px-6">
-        <Link href="/adm/dashboard" className="mr-6">
-          <Image
-            src="/logo-coins.png"
-            alt="Coins for Study"
-            width={120}
-            height={40}
-            className="dark:brightness-200"
-          />
-        </Link>
-
-        <div className="ml-auto flex items-center gap-4">
-          {/* Notifications */}
-          <Button variant="outline" size="sm" className="relative w-10 h-10 p-0">
-            <Bell className="h-5 w-5" />
-            <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] text-white">
-              5
+    <header className="sticky top-0 z-30 bg-gradient-to-br from-[#7C3AED] via-[#7C3AED] to-[#7C3AED] text-white border-b border-white/20">
+      <div className="w-full px-5 h-14 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          {onToggleSidebar && (
+            <button
+              type="button"
+              onClick={onToggleSidebar}
+              aria-label={
+                sidebarOpen ? "Fechar menu lateral" : "Abrir menu lateral"
+              }
+              aria-pressed={!!sidebarOpen}
+              className="p-2 rounded-lg bg-white/10 hover:bg-white/20 transition"
+            >
+              {sidebarOpen ? (
+                <ChevronLeft className="h-5 w-5" />
+              ) : (
+                <Menu className="h-5 w-5" />
+              )}
+            </button>
+          )}
+          <Link href="/adm/dashboard" className="flex items-center gap-2 group">
+            <Image
+              src="/logo-coins.png"
+              alt="Coins for Study"
+              width={36}
+              height={36}
+              className="rounded-sm"
+            />
+            <span className="text-sm font-semibold tracking-wide group-hover:opacity-90">
+              Coins for Study
             </span>
-          </Button>
+          </Link>
+        </div>
 
-          {/* Profile Menu */}
-          <Button variant="outline" size="sm" className="w-10 h-10 p-0">
-            <User className="h-5 w-5" />
-          </Button>
+        <div className="flex items-center gap-3">
+          <Notifications />
+
+          <Link
+            href="/adm/perfil"
+            className="flex items-center gap-2 rounded-lg bg-white/10 hover:bg-white/20 px-2 py-1 transition text-white"
+          >
+            <div className="h-7 w-7 rounded-full bg-gradient-to-br from-purple-400 to-purple-700 grid place-items-center text-xs font-bold text-[#fff]">
+              {admin.nome.split(" ")[0][0]}
+            </div>
+            <span className="text-sm text-white hidden sm:block max-w-[140px] truncate">
+              {admin.nome}
+            </span>
+          </Link>
         </div>
       </div>
     </header>
